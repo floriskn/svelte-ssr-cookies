@@ -1,65 +1,152 @@
-# Svelte library
+# svelte-ssr-cookies
 
-Everything you need to build a Svelte library, powered by [`sv`](https://npmjs.com/package/sv).
+A small library for **typed, schema-driven cookie management** in SvelteKit with SSR support.
 
-Read more about creating a library [in the docs](https://svelte.dev/docs/kit/packaging).
+- Extract only the cookies defined in your schema on the server
+- Pass them to the client without prop drilling
+- Reactive, schema-validated cookies on the client
+- Supports automatic persistence and optional cookie attributes
 
-## Creating a project
+---
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Installation
 
-```sh
-# create a new project in the current directory
-npx sv create
+```bash
+npm install svelte-ssr-cookies
 
-# create a new project in my-app
-npx sv create my-app
+# or with Bun
+
+bun add svelte-ssr-cookies
 ```
 
-To recreate this project with the same configuration:
+---
 
-```sh
-# recreate this project
-bun x sv create --template library --types ts --add prettier eslint vitest="usages:unit" --install bun ./
+## Features
+
+- Server: `pickCookies` — filters cookies by schema
+- Client: `useCookies` — reactive proxy for schema-defined cookies
+- Validation against a standard schema (`StandardSchemaV1`)
+- Automatic JSON parsing/stringifying
+- Optional cookie attributes (`expires`, `path`, `domain`, `secure`, `sameSite`)
+
+---
+
+## Server Usage
+
+In your `+layout.server.ts` or any load function:
+
+```ts
+import { pickCookies } from '@svelte-ssr-cookies/server';
+import { schema } from '$lib/schemas/cookies';
+
+import type { LayoutServerLoad } from './$types';
+
+export const load = (async ({ cookies }) => {
+	// Pick only the cookies defined in the schema
+	const serverCookies = pickCookies(cookies, schema);
+
+	return {
+		cookies: serverCookies
+	};
+}) satisfies LayoutServerLoad;
 ```
 
-## Developing
+This ensures that only cookies defined in your schema are sent to the client.
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+---
 
-```sh
-npm run dev
+## Client Usage
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+In a layout page:
+
+```svelte
+<script lang="ts">
+	import type { LayoutProps } from './$types';
+
+	import { setContext } from 'svelte';
+	import { useCookies } from '@svelte-ssr-cookies/client';
+	import { schema } from '$lib/schemas/cookies';
+
+	// cookies returned from server load function
+	let { data, children }: LayoutProps = $props();
+
+	// Create reactive cookies proxy
+	const cookies = useCookies(schema, data.cookies);
+
+	// Provide in this context
+	setContext('cookies', cookies);
+
+	// Read/write automatically reactive
+	$inspect(cookies.state);
+	cookies.state = false; // persisted automatically
+</script>
+
+{@render children?.()}
 ```
 
-Everything inside `src/lib` is part of your library, everything inside `src/routes` can be used as a showcase or preview app.
+Anywhere in this layout subtree, you can inject the cookies from context:
 
-## Building
-
-To build your library:
-
-```sh
-npm pack
+```ts
+import { getContext } from 'svelte';
+const cookies = getContext('cookies');
+$inspect(cookies.state); // reactive
 ```
 
-To create a production version of your showcase app:
+---
 
-```sh
-npm run build
+## Cookie Attributes (Optional)
+
+You can set cookies with specific options using `update`:
+
+```ts
+cookies.update('state', true, {
+	expires: 7, // 7 days
+	path: '/',
+	secure: true,
+	sameSite: 'lax'
+});
 ```
 
-You can preview the production build with `npm run preview`.
+---
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Schema Example
 
-## Publishing
+```ts
+import z from 'zod';
 
-Go into the `package.json` and give your package the desired name through the `"name"` option. Also consider adding a `"license"` field and point it to a `LICENSE` file which you can create from a template (one popular option is the [MIT license](https://opensource.org/license/mit/)).
-
-To publish your library to [npm](https://www.npmjs.com):
-
-```sh
-npm publish
+export const schema = z.object({
+	state: z.boolean().default(true)
+});
 ```
+
+> ⚠️ Each schema entry **requires a default value**; entries without defaults will be skipped by the library.
+
+---
+
+## Advanced: Reactivity in Layout
+
+You can bind reactive cookies directly to UI components. For example:
+
+```svelte
+<script lang="ts">
+	import { getContext } from 'svelte';
+	const cookies = getContext('cookies');
+</script>
+
+<label>
+	<input type="checkbox" bind:checked={cookies.state} />
+	State cookie
+</label>
+
+<p>
+	Current state: {cookies.state ? 'Active' : 'Inactive'}
+</p>
+```
+
+Changes to `cookies.state` automatically:
+
+- Update the cookie in the browser
+- Trigger reactivity in Svelte components
+- No prop drilling required
+
+This makes cookies behave like reactive Svelte stores throughout the layout subtree.
