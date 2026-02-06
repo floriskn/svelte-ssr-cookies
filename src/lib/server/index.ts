@@ -40,12 +40,12 @@ export function pickCookies<Schema extends StandardSchemaV1>(
 	const keys = getCachedKeys(schema);
 	const picked: Partial<Record<string, unknown>> = {};
 
-	for (const name of keys) {
-		const key = encodeURIComponent(name)
+	for (const key of keys) {
+		const encodedKey = encodeURIComponent(key)
 			.replace(/%(2[346B]|5E|60|7C)/g, decodeURIComponent)
 			.replace(/[()]/g, escape);
 
-		const raw = cookies.get(key, opts);
+		const raw = cookies.get(encodedKey, opts);
 		if (raw === undefined) continue;
 
 		try {
