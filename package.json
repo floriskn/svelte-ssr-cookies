@@ -1,6 +1,6 @@
 {
 	"name": "svelte-ssr-cookies",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Typed, schema-driven cookie management for SvelteKit with SSR support.",
 	"author": "Floriskn",
 	"keywords": [
