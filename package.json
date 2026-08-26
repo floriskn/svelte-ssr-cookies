@@ -3,6 +3,10 @@
 	"version": "0.0.11",
 	"description": "Typed, schema-driven cookie management for SvelteKit with SSR support.",
 	"author": "Floriskn",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/floriskn/svelte-ssr-cookies.git"
+	},
 	"keywords": [
 		"svelte",
 		"ssr",
