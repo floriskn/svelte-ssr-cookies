@@ -1,4 +1,4 @@
-import type { StandardSchemaV1 } from './standard-schema.ts';
+import { isFailureResult, type StandardSchemaV1 } from './standard-schema.ts';
 
 /**
  * Schema information extracted from validation
@@ -49,7 +49,11 @@ function extractZodCodecEncoder(fieldSchema: unknown): ((value: unknown) => unkn
 export function extractSchemaInfo<Schema extends StandardSchemaV1>(schema: Schema): SchemaInfo {
 	const validationResult = schema['~standard'].validate({});
 
-	if (!validationResult || !('value' in validationResult)) {
+	if (
+		!validationResult ||
+		validationResult instanceof Promise ||
+		isFailureResult(validationResult)
+	) {
 		return { keys: [], codecEncoders: new Map() };
 	}
 

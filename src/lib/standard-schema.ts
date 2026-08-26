@@ -67,3 +67,33 @@ export declare namespace StandardSchemaV1 {
 		Schema['~standard']['types']
 	>['output'];
 }
+
+/**
+ * True when a `validate()` result failed.
+ *
+ * Not `'value' in result` — that was this package's original check, and it's unreliable: at
+ * least Valibot's `~standard.validate()` sets an own `value` property (either the echoed-back
+ * input, or `undefined` for a top-level type mismatch, e.g. an object schema validating
+ * `undefined`) on *both* success and failure results, so `'value' in result` is true
+ * unconditionally for Valibot and never actually distinguishes the two — silently disabling
+ * every fallback path built on that check. `issues` is the actual Standard Schema discriminator
+ * per the spec: present and non-empty only on a `FailureResult`.
+ */
+export function isFailureResult<T>(
+	result: StandardSchemaV1.Result<T>
+): result is StandardSchemaV1.FailureResult {
+	return Array.isArray(result.issues) && result.issues.length > 0;
+}
+
+/**
+ * Whether an issue's `path` names `key` — a path entry is either a raw `PropertyKey` or a
+ * `{ key }` segment object per the spec (Valibot's own issues carry a richer object with a
+ * `key` field, matching the latter). `path?.includes(key)` — this package's original check —
+ * compares the array against a bare string with `===`, which never matches a segment object,
+ * so it silently kept every "invalid" key instead of filtering it out.
+ */
+export function issuePathHasKey(path: StandardSchemaV1.Issue['path'], key: PropertyKey): boolean {
+	return !!path?.some(
+		(segment) => (typeof segment === 'object' && segment !== null ? segment.key : segment) === key
+	);
+}

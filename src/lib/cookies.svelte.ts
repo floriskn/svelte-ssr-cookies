@@ -2,7 +2,7 @@ import { dequal } from 'dequal/lite';
 import jsCookie from 'js-cookie';
 
 import { extractSchemaInfo } from './schema.ts';
-import type { StandardSchemaV1 } from './standard-schema.ts';
+import { isFailureResult, issuePathHasKey, type StandardSchemaV1 } from './standard-schema.ts';
 
 class Cookies<Schema extends StandardSchemaV1> {
 	/** Schema used for validation and type conversion */
@@ -30,7 +30,11 @@ class Cookies<Schema extends StandardSchemaV1> {
 	 */
 	constructor(schema: Schema, cookies: StandardSchemaV1.InferOutput<Schema>) {
 		this.#schema = schema;
-		this.#cookies = cookies;
+		// Never let the reactive cache itself be `undefined`/`null` — every downstream read
+		// treats it as a plain object (`Object.entries`, property access), and a caller passing
+		// an undefined/partial `cookies` argument (e.g. cookie data that hasn't resolved yet)
+		// shouldn't be able to crash every subsequent `.get()`/`.set()` call over it.
+		this.#cookies = cookies ?? ({} as StandardSchemaV1.InferOutput<Schema>);
 
 		const schemaInfo = extractSchemaInfo(schema);
 
@@ -112,23 +116,20 @@ class Cookies<Schema extends StandardSchemaV1> {
 	#getTypedValue<K extends keyof StandardSchemaV1.InferOutput<Schema>>(
 		key: K & string
 	): StandardSchemaV1.InferOutput<Schema>[K] | undefined {
-		const paramsObject = this.#cookies as Record<string, unknown>;
+		const paramsObject = (this.#cookies ?? {}) as Record<string, unknown>;
 		const result = this.validate(paramsObject);
 
 		if (result instanceof Promise) {
 			throw new Error('Async validation not supported');
 		}
 
-		if (result && 'value' in result) {
-			return (result.value as Record<string, unknown>)[
-				key
-			] as StandardSchemaV1.InferOutput<Schema>[K];
-		} else if (result && 'issues' in result) {
+		if (isFailureResult(result)) {
 			const emptyResult = this.validate({});
-			const defaultValues = emptyResult && 'value' in emptyResult ? emptyResult.value : {};
+			const defaultValues =
+				!(emptyResult instanceof Promise) && !isFailureResult(emptyResult) ? emptyResult.value : {};
 			const validParams = Object.fromEntries(
 				Object.entries(paramsObject).filter(
-					([k]) => !result.issues?.some((issue) => issue.path?.includes(k))
+					([k]) => !result.issues.some((issue) => issuePathHasKey(issue.path, k))
 				)
 			);
 			return {
@@ -137,7 +138,9 @@ class Cookies<Schema extends StandardSchemaV1> {
 			}[key] as StandardSchemaV1.InferOutput<Schema>[K];
 		}
 
-		return undefined;
+		return (result.value as Record<string, unknown>)[
+			key
+		] as StandardSchemaV1.InferOutput<Schema>[K];
 	}
 
 	/**
@@ -153,7 +156,7 @@ class Cookies<Schema extends StandardSchemaV1> {
 	#setValue(key: string, value: unknown, options?: Cookies.CookieAttributes): void {
 		if (!this.has(key)) return;
 
-		const paramsObject = this.#cookies as Record<string, unknown>;
+		const paramsObject = (this.#cookies ?? {}) as Record<string, unknown>;
 		const currentValue = paramsObject[key];
 
 		const isPrimitive =
@@ -177,7 +180,16 @@ class Cookies<Schema extends StandardSchemaV1> {
 		const newParamsObject = { ...paramsObject, [key]: valueForValidation };
 		const result = this.validate(newParamsObject);
 
-		if (result && 'value' in result) {
+		if (result instanceof Promise) {
+			throw new Error('Async validation not supported');
+		}
+
+		// Same discriminator fix as `#getTypedValue` — `'value' in result` was true even on
+		// failure, so an invalid write used to persist the cookie and then crash reading
+		// `result.value[key]` off an `undefined` (or otherwise unvalidated) `value`. A failed
+		// write is now silently dropped instead, per this method's own "skips unknown/invalid"
+		// contract.
+		if (!isFailureResult(result)) {
 			const validatedResult = result.value as Record<string, unknown>;
 			jsCookie.set(key, JSON.stringify(value), options);
 			(this.#cookies as Record<string, unknown>)[key] = validatedResult[key];
