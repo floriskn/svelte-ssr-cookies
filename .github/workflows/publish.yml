@@ -24,6 +24,10 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org/
 
+      # Trusted publishing (OIDC) requires npm >= 11.5.1
+      - name: Update npm
+        run: npm install -g npm@latest
+
       # Setup Bun for building
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -41,7 +45,8 @@ jobs:
       - name: Build package
         run: bun run build
 
+      # No NODE_AUTH_TOKEN needed: npm exchanges the GitHub OIDC
+      # token (id-token: write, above) for a short-lived publish
+      # token once trusted publishing is configured on npmjs.com.
       - name: Publish
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
