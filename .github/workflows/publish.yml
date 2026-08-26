@@ -47,6 +47,17 @@ jobs:
       - name: Build package
         run: bun run build
 
+      # Temporary diagnostics for trusted publishing setup.
+      # Remove once a publish succeeds.
+      - name: Debug OIDC environment
+        run: |
+          echo "npm version: $(npm --version)"
+          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
+          echo "repo: $GITHUB_REPOSITORY"
+          echo "workflow: $GITHUB_WORKFLOW_REF"
+
       # No NODE_AUTH_TOKEN needed: npm exchanges the GitHub OIDC
       # token (id-token: write, above) for a short-lived publish
       # token once trusted publishing is configured on npmjs.com.
