@@ -19,8 +19,41 @@ class Cookies<Schema extends StandardSchemaV1> {
 	 */
 	#codecEncoders: Map<string, (value: unknown) => unknown>;
 
-	/** Local cache of cookie values */
+	/**
+	 * Reactive cache — only ever *read* from once a real write has happened (see `#unedited`
+	 * and `#cache()`). Kept as `$state` regardless, because the moment `#setValue` runs it has
+	 * to trigger every existing subscriber (Svelte control-flow, `$derived`s, etc.) that's
+	 * already reading through `#cache()`.
+	 */
 	#cookies: StandardSchemaV1.InferOutput<Schema> = $state();
+
+	/**
+	 * Plain, non-reactive snapshot of the same initial value — what `#cache()` actually reads
+	 * from until the first write. See `#unedited`'s own comment for why this exists at all.
+	 */
+	#_cookies: StandardSchemaV1.InferOutput<Schema>;
+
+	/**
+	 * True until the first `#setValue` call, in which case every read goes through `#_cookies`
+	 * (the plain field above) instead of `#cookies` (the `$state` one).
+	 *
+	 * This works around a reproducible issue where reading a `$state`-wrapped private class
+	 * field — one constructed once, during SSR→CSR hydration, and never written to afterward —
+	 * observably returns a different value across repeated reads with no `#setValue` call, no
+	 * reconstruction, and no external mutation of the source object in between (all three ruled
+	 * out directly: constructor logging showed exactly one construction, `#setValue` logging
+	 * showed zero calls, and deep-cloning the constructor's `cookies` argument — so `#cookies`
+	 * can't be aliased to anything external — made no difference). Nothing actually *needs*
+	 * reactivity before the first genuine write, since nothing changes before then by
+	 * definition — so reads simply avoid `$state` entirely for that whole window, sidestepping
+	 * whatever is producing that divergence rather than explaining it.
+	 */
+	#unedited = true;
+
+	/** What `#getTypedValue`/`#setValue` treat as the current cookie values — see `#unedited`. */
+	#cache(): Record<string, unknown> {
+		return (this.#unedited ? this.#_cookies : this.#cookies) as Record<string, unknown>;
+	}
 
 	/**
 	 * Create a cookie manager for a schema and initial values.
@@ -30,11 +63,19 @@ class Cookies<Schema extends StandardSchemaV1> {
 	 */
 	constructor(schema: Schema, cookies: StandardSchemaV1.InferOutput<Schema>) {
 		this.#schema = schema;
-		// Never let the reactive cache itself be `undefined`/`null` — every downstream read
-		// treats it as a plain object (`Object.entries`, property access), and a caller passing
-		// an undefined/partial `cookies` argument (e.g. cookie data that hasn't resolved yet)
+		// Never let the cache itself be `undefined`/`null` — every downstream read treats it as
+		// a plain object (`Object.entries`, property access), and a caller passing an
+		// undefined/partial `cookies` argument (e.g. cookie data that hasn't resolved yet)
 		// shouldn't be able to crash every subsequent `.get()`/`.set()` call over it.
-		this.#cookies = cookies ?? ({} as StandardSchemaV1.InferOutput<Schema>);
+		//
+		// Deep-cloned, not taken by reference — `$state()` wraps whatever object it's given in
+		// place, so without this, `#cookies` would stay aliased to the caller's own object for
+		// this instance's entire lifetime, and the same object also backs `#_cookies` below.
+		const initial = cookies
+			? structuredClone(cookies)
+			: ({} as StandardSchemaV1.InferOutput<Schema>);
+		this.#cookies = initial;
+		this.#_cookies = initial;
 
 		const schemaInfo = extractSchemaInfo(schema);
 
@@ -116,7 +157,7 @@ class Cookies<Schema extends StandardSchemaV1> {
 	#getTypedValue<K extends keyof StandardSchemaV1.InferOutput<Schema>>(
 		key: K & string
 	): StandardSchemaV1.InferOutput<Schema>[K] | undefined {
-		const paramsObject = (this.#cookies ?? {}) as Record<string, unknown>;
+		const paramsObject = this.#cache();
 		const result = this.validate(paramsObject);
 
 		if (result instanceof Promise) {
@@ -156,7 +197,12 @@ class Cookies<Schema extends StandardSchemaV1> {
 	#setValue(key: string, value: unknown, options?: Cookies.CookieAttributes): void {
 		if (!this.has(key)) return;
 
-		const paramsObject = (this.#cookies ?? {}) as Record<string, unknown>;
+		const paramsObject = this.#cache();
+		// From here on, reads go through the reactive `#cookies` field instead of the plain
+		// `#_cookies` snapshot — see `#unedited`'s own comment. `#cookies` gets brought fully up
+		// to date below, once validation confirms this write is actually applied.
+		this.#unedited = false;
+
 		const currentValue = paramsObject[key];
 
 		const isPrimitive =
@@ -192,7 +238,11 @@ class Cookies<Schema extends StandardSchemaV1> {
 		if (!isFailureResult(result)) {
 			const validatedResult = result.value as Record<string, unknown>;
 			jsCookie.set(key, JSON.stringify(value), options);
-			(this.#cookies as Record<string, unknown>)[key] = validatedResult[key];
+			// The whole validated object, not a single keyed mutation — `#cookies` may not have
+			// been read (or written) at all up to this point (`#unedited` was true), so this is
+			// what actually brings it up to date with everything `#_cookies` already held, on
+			// top of this one new change, in a single assignment.
+			this.#cookies = validatedResult as StandardSchemaV1.InferOutput<Schema>;
 		}
 	}
 }
