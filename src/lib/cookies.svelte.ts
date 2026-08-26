@@ -30,23 +30,11 @@ class Cookies<Schema extends StandardSchemaV1> {
 	 */
 	constructor(schema: Schema, cookies: StandardSchemaV1.InferOutput<Schema>) {
 		this.#schema = schema;
-		// Deep-cloned, not taken by reference — `$state()` wraps whatever object it's given in
-		// place, so without this, `#cookies` would stay aliased to the caller's own object for
-		// this instance's entire lifetime. If that object is itself held onto and later mutated
-		// or replaced by the caller (or by whatever framework machinery produced it — e.g. a
-		// page/layout `data` prop that gets its own object identity swapped as part of routing),
-		// those changes leak straight into this reactive cache without ever going through
-		// `#setValue` — an unexplained value change with no `.set()`/`.update()` call anywhere to
-		// account for it. Cloning here makes `#cookies` fully owned: nothing outside this class
-		// can change it, and it can only ever change through this class's own methods.
-		//
-		// Never let the reactive cache itself be `undefined`/`null` either — every downstream
-		// read treats it as a plain object (`Object.entries`, property access), and a caller
-		// passing an undefined/partial `cookies` argument (e.g. cookie data that hasn't resolved
-		// yet) shouldn't be able to crash every subsequent `.get()`/`.set()` call over it.
-		this.#cookies = cookies
-			? structuredClone(cookies)
-			: ({} as StandardSchemaV1.InferOutput<Schema>);
+		// Never let the reactive cache itself be `undefined`/`null` — every downstream read
+		// treats it as a plain object (`Object.entries`, property access), and a caller passing
+		// an undefined/partial `cookies` argument (e.g. cookie data that hasn't resolved yet)
+		// shouldn't be able to crash every subsequent `.get()`/`.set()` call over it.
+		this.#cookies = cookies ?? ({} as StandardSchemaV1.InferOutput<Schema>);
 
 		const schemaInfo = extractSchemaInfo(schema);
 
