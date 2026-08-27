@@ -3,6 +3,7 @@ import jsCookie from 'js-cookie';
 
 import { extractSchemaInfo } from './schema.ts';
 import { isFailureResult, issuePathHasKey, type StandardSchemaV1 } from './standard-schema.ts';
+import { onMount } from 'svelte';
 
 class Cookies<Schema extends StandardSchemaV1> {
 	/** Schema used for validation and type conversion */
@@ -33,26 +34,9 @@ class Cookies<Schema extends StandardSchemaV1> {
 	 */
 	#_cookies: StandardSchemaV1.InferOutput<Schema>;
 
-	/**
-	 * True until the first `#setValue` call, in which case every read goes through `#_cookies`
-	 * (the plain field above) instead of `#cookies` (the `$state` one).
-	 *
-	 * This works around a reproducible issue where reading a `$state`-wrapped private class
-	 * field — one constructed once, during SSR→CSR hydration, and never written to afterward —
-	 * observably returns a different value across repeated reads with no `#setValue` call, no
-	 * reconstruction, and no external mutation of the source object in between (all three ruled
-	 * out directly: constructor logging showed exactly one construction, `#setValue` logging
-	 * showed zero calls, and deep-cloning the constructor's `cookies` argument — so `#cookies`
-	 * can't be aliased to anything external — made no difference). Nothing actually *needs*
-	 * reactivity before the first genuine write, since nothing changes before then by
-	 * definition — so reads simply avoid `$state` entirely for that whole window, sidestepping
-	 * whatever is producing that divergence rather than explaining it.
-	 */
-	#unedited = true;
-
 	/** What `#getTypedValue`/`#setValue` treat as the current cookie values — see `#unedited`. */
 	#cache(): Record<string, unknown> {
-		return (this.#unedited ? this.#_cookies : this.#cookies) as Record<string, unknown>;
+		return (this.#cookies ?? this.#_cookies) as Record<string, unknown>;
 	}
 
 	/**
@@ -74,8 +58,11 @@ class Cookies<Schema extends StandardSchemaV1> {
 		const initial = cookies
 			? structuredClone(cookies)
 			: ({} as StandardSchemaV1.InferOutput<Schema>);
-		this.#cookies = initial;
 		this.#_cookies = initial;
+
+		onMount(() => {
+			this.#cookies = initial;
+		});
 
 		const schemaInfo = extractSchemaInfo(schema);
 
@@ -198,10 +185,6 @@ class Cookies<Schema extends StandardSchemaV1> {
 		if (!this.has(key)) return;
 
 		const paramsObject = this.#cache();
-		// From here on, reads go through the reactive `#cookies` field instead of the plain
-		// `#_cookies` snapshot — see `#unedited`'s own comment. `#cookies` gets brought fully up
-		// to date below, once validation confirms this write is actually applied.
-		this.#unedited = false;
 
 		const currentValue = paramsObject[key];
 
