@@ -21,22 +21,37 @@ class Cookies<Schema extends StandardSchemaV1> {
 	#codecEncoders: Map<string, (value: unknown) => unknown>;
 
 	/**
-	 * Reactive cache — only ever *read* from once a real write has happened (see `#unedited`
-	 * and `#cache()`). Kept as `$state` regardless, because the moment `#setValue` runs it has
-	 * to trigger every existing subscriber (Svelte control-flow, `$derived`s, etc.) that's
-	 * already reading through `#cache()`.
+	 * Reactive cache. Left `undefined` until the component mounts (see the constructor) or the
+	 * first `#setValue` write, whichever comes first; until then `#cache()` falls back to the
+	 * `#initialCookies` snapshot. Deferring the initial assignment out of the constructor works
+	 * around a Svelte SSR/hydration bug where a `$state` field first written during construction
+	 * returns inconsistent values on later reads.
+	 *
+	 * Once set it is the single source of truth, and every `#setValue` reassigns it so existing
+	 * subscribers (Svelte control-flow, `$derived`s, etc.) reading through `#cache()` re-run.
 	 */
 	#cookies: StandardSchemaV1.InferOutput<Schema> = $state();
 
 	/**
-	 * Plain, non-reactive snapshot of the same initial value — what `#cache()` actually reads
-	 * from until the first write. See `#unedited`'s own comment for why this exists at all.
+	 * Plain, non-reactive snapshot of the initial values. `#cache()` reads from this until
+	 * `#cookies` is populated (at mount, or on the first write), so reads work during SSR and
+	 * before mount without touching `$state`.
 	 */
-	#_cookies: StandardSchemaV1.InferOutput<Schema>;
+	#initialCookies: StandardSchemaV1.InferOutput<Schema>;
 
-	/** What `#getTypedValue`/`#setValue` treat as the current cookie values — see `#unedited`. */
+	/**
+	 * The current cookie values, as seen by `#getTypedValue`/`#setValue` and every reactive
+	 * read that flows through them.
+	 *
+	 * `#cookies` is read here on purpose, not only in the write path: Svelte registers a
+	 * `$state` field as a dependency of a `$derived`/effect/template only if it is read during
+	 * that computation. If this fell back to `#initialCookies` *without* also reading `#cookies`,
+	 * any read that happened before the first write would never subscribe to `#cookies`, and
+	 * that first write wouldn't refresh it. The `??` keeps the pre-mount snapshot as the value
+	 * while still touching `#cookies` so the subscription is created.
+	 */
 	#cache(): Record<string, unknown> {
-		return (this.#cookies ?? this.#_cookies) as Record<string, unknown>;
+		return (this.#cookies ?? this.#initialCookies) as Record<string, unknown>;
 	}
 
 	/**
@@ -52,16 +67,17 @@ class Cookies<Schema extends StandardSchemaV1> {
 		// undefined/partial `cookies` argument (e.g. cookie data that hasn't resolved yet)
 		// shouldn't be able to crash every subsequent `.get()`/`.set()` call over it.
 		//
-		// Deep-cloned, not taken by reference — `$state()` wraps whatever object it's given in
-		// place, so without this, `#cookies` would stay aliased to the caller's own object for
-		// this instance's entire lifetime, and the same object also backs `#_cookies` below.
-		const initial = cookies
-			? structuredClone(cookies)
-			: ({} as StandardSchemaV1.InferOutput<Schema>);
-		this.#_cookies = initial;
+		// `initial` is held by reference by `#initialCookies` now and by `#cookies` at mount;
+		// `$state` proxies it in place, so it must not be mutated outside `#setValue`.
+		const initial = cookies ?? ({} as StandardSchemaV1.InferOutput<Schema>);
+		this.#initialCookies = initial;
 
+		// Populate the reactive field at mount, not here — see `#cookies`. The `??=` guard
+		// matters: a `#setValue` call between construction and mount (component init,
+		// `$effect.pre`, a synchronous store subscription, …) already sets `#cookies` to the
+		// up-to-date validated object, and this callback must not clobber it with stale `initial`.
 		onMount(() => {
-			this.#cookies = initial;
+			this.#cookies ??= initial;
 		});
 
 		const schemaInfo = extractSchemaInfo(schema);
@@ -221,10 +237,11 @@ class Cookies<Schema extends StandardSchemaV1> {
 		if (!isFailureResult(result)) {
 			const validatedResult = result.value as Record<string, unknown>;
 			jsCookie.set(key, JSON.stringify(value), options);
-			// The whole validated object, not a single keyed mutation — `#cookies` may not have
-			// been read (or written) at all up to this point (`#unedited` was true), so this is
-			// what actually brings it up to date with everything `#_cookies` already held, on
-			// top of this one new change, in a single assignment.
+			// Assign the whole validated object, not a single keyed mutation — `#cookies` may
+			// still be `undefined` here (a write before mount; see `#cookies`), so this both
+			// initialises it from everything `#initialCookies` held and applies this one change,
+			// in a single reactive assignment. If mount hasn't happened yet, the `onMount`
+			// callback's `??=` then leaves this value untouched.
 			this.#cookies = validatedResult as StandardSchemaV1.InferOutput<Schema>;
 		}
 	}
